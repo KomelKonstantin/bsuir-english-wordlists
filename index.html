@@ -110,28 +110,6 @@
   }
   .gate-card h2{font-family:Spectral, Georgia, serif; font-weight:600; font-size:23px; margin:0 0 6px; line-height:1.2}
   .gate-sub{color:var(--muted); font-size:13.5px; margin:0 0 20px; line-height:1.5}
-  .profile-list{display:grid; gap:8px; margin-bottom:18px}
-  .profile-row{
-    display:flex; align-items:center; gap:11px; width:100%; text-align:left;
-    padding:11px 13px; border-radius:11px; border:1px solid var(--line); background:var(--surface-2);
-  }
-  .profile-row:hover{border-color:var(--accent)}
-  .avatar{
-    width:34px; height:34px; border-radius:50%; flex:none;
-    background:var(--accent-soft); color:var(--accent);
-    display:grid; place-items:center; font-weight:600; font-size:14px;
-  }
-  .profile-meta{flex:1; min-width:0}
-  .profile-meta b{display:block; font-size:15px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-  .profile-meta span{font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums}
-  .lock{font-size:13px; color:var(--muted); flex:none}
-  .field{display:grid; gap:6px; margin-bottom:12px}
-  .field label{font-size:12.5px; color:var(--muted)}
-  .field input{
-    padding:12px 14px; font:inherit; color:var(--ink); background:var(--surface-2);
-    border:1px solid var(--line); border-radius:11px; width:100%;
-  }
-  .field input::placeholder{color:var(--muted)}
   .divider{display:flex; align-items:center; gap:10px; margin:20px 0; color:var(--muted); font-size:12px}
   .divider::before, .divider::after{content:""; flex:1; height:1px; background:var(--line)}
   .link-btn{
@@ -155,7 +133,6 @@
   .stat{background:var(--surface-2); border:1px solid var(--line); border-radius:11px; padding:12px 13px}
   .stat b{display:block; font-family:Spectral, Georgia, serif; font-size:22px; font-weight:600; font-variant-numeric:tabular-nums}
   .stat span{font-size:11.5px; color:var(--muted)}
-  .profile-chip .avatar{width:19px; height:19px; font-size:10px}
 
   /* ---------- lesson index ---------- */
   .module-head{
@@ -371,7 +348,7 @@
 
 <div class="wrap">
   <div class="toolbar">
-    <button class="chip profile-chip" id="profileBtn" aria-label="Профиль и прогресс"></button>
+    <button class="chip" id="profileBtn">Прогресс · файл</button>
     <select class="chip" id="lessonSel" aria-label="Выбрать урок"></select>
     <button class="chip" id="dirBtn" aria-pressed="false">EN → RU</button>
     <select class="chip" id="filterSel" aria-label="Какие слова показывать">
@@ -409,8 +386,9 @@
     TOTAL += L.entries.length;
   });
 
-  var ACC_KEY = "bsuir-wordlists-accounts-v1";
-  var OLD_KEY = "bsuir-wordlists-v2";   // прогресс версии без профилей
+  var KEY = "bsuir-wordlists-progress-v1";
+  var ACC_KEY = "bsuir-wordlists-accounts-v1";   // прежние профили — только чтобы перенести прогресс
+  var OLD_KEY = "bsuir-wordlists-v2";            // ещё более ранняя версия
   var FILE_TAG = "bsuir-english-wordlists";
 
   var S = {
@@ -426,100 +404,58 @@
     return null;
   }
 
-  /* --- хранилище профилей --------------------------------------------- */
-  var DB = { version:1, profiles:[], active:null };
-  var legacy = null;   // прогресс из версии без профилей, если он есть
-
-  function saveDB(){
-    try{ localStorage.setItem(ACC_KEY, JSON.stringify(DB)); }catch(e){}
+  /* --- прогресс: один набор на браузер, без регистрации ---------------- */
+  function applyProgress(d){
+    if(!d || typeof d !== "object") return false;
+    S.known = d.known || {}; S.hard = d.hard || {};
+    if(d.dir === "ru-en" || d.dir === "en-ru") S.dir = d.dir;
+    if(byLesson(d.lesson)) S.lesson = d.lesson;
+    return true;
   }
-  function loadDB(){
+  function save(){
     try{
-      var raw = localStorage.getItem(ACC_KEY);
-      if(raw){
-        var d = JSON.parse(raw);
-        if(d && d.profiles) DB = d;
+      localStorage.setItem(KEY, JSON.stringify({
+        known:S.known, hard:S.hard, dir:S.dir, lesson:S.lesson, updated:Date.now()
+      }));
+    }catch(e){}
+  }
+  function countKeys(o){ var c = 0; for(var k in o) if(o.hasOwnProperty(k) && byId[k]) c++; return c; }
+
+  function load(){
+    try{
+      var raw = localStorage.getItem(KEY);
+      if(raw && applyProgress(JSON.parse(raw))) return;
+    }catch(e){}
+
+    // первый запуск после отказа от профилей: забираем прогресс из прежних версий.
+    // Старые записи не удаляем — вдруг понадобятся.
+    try{
+      var acc = JSON.parse(localStorage.getItem(ACC_KEY) || "null");
+      if(acc && acc.profiles && acc.profiles.length){
+        var pick = null;
+        acc.profiles.forEach(function(p){
+          if(p.id === acc.active) pick = p;
+        });
+        if(!pick){
+          acc.profiles.forEach(function(p){
+            if(!pick || countKeys(p.known || {}) > countKeys(pick.known || {})) pick = p;
+          });
+        }
+        if(pick && applyProgress(pick)){ save(); return; }
       }
     }catch(e){}
     try{
       var old = localStorage.getItem(OLD_KEY);
-      if(old && !DB.profiles.length){
-        var o = JSON.parse(old);
-        if(o && (o.known || o.hard)) legacy = { known:o.known || {}, hard:o.hard || {}, dir:o.dir, lesson:o.lesson };
-      }
+      if(old && applyProgress(JSON.parse(old))) save();
     }catch(e){}
   }
 
-  // не шифрование — ПИН просто не хранится открытым текстом
-  function pinHash(s){
-    var h = 5381;
-    for(var i=0;i<s.length;i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-    return "p" + h.toString(36);
-  }
-  function uid(){
-    return "u" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-  }
-  function profileById(id){
-    for(var i=0;i<DB.profiles.length;i++) if(DB.profiles[i].id === id) return DB.profiles[i];
-    return null;
-  }
-  function profileByName(name){
-    var k = name.trim().toLowerCase();
-    for(var i=0;i<DB.profiles.length;i++) if(DB.profiles[i].name.trim().toLowerCase() === k) return DB.profiles[i];
-    return null;
-  }
-  function activeProfile(){ return profileById(DB.active); }
-
-  function createProfile(name, pin, progress){
-    var p = {
-      id: uid(),
-      name: name.trim().slice(0, 40) || "Без имени",
-      pin: pin ? pinHash(pin) : null,
-      created: Date.now(),
-      updated: Date.now(),
-      lesson: LESSONS[0].n,
-      dir: "en-ru",
-      known: (progress && progress.known) || {},
-      hard: (progress && progress.hard) || {}
-    };
-    DB.profiles.push(p);
-    saveDB();
-    return p;
-  }
-
-  function useProfile(p){
-    DB.active = p.id;
-    S.known = p.known;
-    S.hard = p.hard;
-    S.dir = (p.dir === "ru-en" || p.dir === "en-ru") ? p.dir : "en-ru";
-    S.lesson = byLesson(p.lesson) ? p.lesson : LESSONS[0].n;
-    resetOrder();
-    S.pos = 0; S.flipped = false; S.query = "";
-    startQuiz(); startMatch(); resetTest();
-    saveDB();
-  }
-
-  function save(){
-    var p = activeProfile();
-    if(p){
-      p.known = S.known; p.hard = S.hard;
-      p.dir = S.dir; p.lesson = S.lesson;
-      p.updated = Date.now();
-    }
-    saveDB();
-  }
-
-  function countKeys(o){ var c = 0; for(var k in o) if(o.hasOwnProperty(k) && byId[k]) c++; return c; }
-  function initials(name){
-    var parts = name.trim().split(/\s+/).slice(0, 2);
-    return parts.map(function(s){ return s.charAt(0).toUpperCase(); }).join("") || "?";
-  }
   function fmtDate(ts){
     try{ return new Date(ts).toLocaleDateString("ru-RU", {day:"numeric", month:"short", year:"numeric"}); }
     catch(e){ return ""; }
   }
 
-  loadDB();
+  load();
 
   function words(){ return ALL[S.lesson]; }
   function lesson(){ return byLesson(S.lesson); }
@@ -1107,28 +1043,23 @@
     });
   }
 
-  /* ---------------- вход и файл прогресса ---------------- */
+  /* ---------------- прогресс: сохранить и загрузить файлом ---------------- */
   var gate = document.getElementById("gate");
   var fileIn = document.getElementById("fileIn");
-  var G = { screen:"login", pending:null, msg:null, msgKind:"err", payload:null };
+  var G = { msg:null, msgKind:"ok", payload:null };
 
-  function showGate(screen){
-    G.screen = screen; G.pending = null; G.msg = null; G.payload = null;
+  function openProgress(){
+    G.msg = null; G.payload = null;
     gate.hidden = false;
-    renderGate();
+    renderProgress();
   }
-  function closeGate(){
-    if(!activeProfile()) return;      // без профиля закрывать некуда
+  function closeProgress(){
     gate.hidden = true;
     render();
   }
   function gateMsg(text, kind){
     G.msg = text; G.msgKind = kind || "err";
-    renderGate();
-  }
-
-  function renderGate(){
-    if(G.screen === "account") renderAccount(); else renderLogin();
+    renderProgress();
   }
 
   // блок загрузки прогресса: файлом или вставленным текстом
@@ -1157,118 +1088,17 @@
     };
   }
 
-  function renderLogin(){
-    var pending = G.pending ? profileById(G.pending) : null;
-
-    if(pending){
-      gate.innerHTML =
-        '<div class="gate-card">' +
-          '<div class="gate-eyebrow">Вход в профиль</div>' +
-          '<h2>' + esc(pending.name) + '</h2>' +
-          '<p class="gate-sub">Профиль защищён ПИН-кодом.</p>' +
-          (G.msg ? '<div class="msg ' + G.msgKind + '">' + esc(G.msg) + '</div>' : "") +
-          '<form id="pinForm" autocomplete="off">' +
-            '<div class="field">' +
-              '<label for="pinInput">ПИН-код</label>' +
-              '<input id="pinInput" type="password" inputmode="numeric" placeholder="••••" maxlength="12">' +
-            '</div>' +
-            '<div class="row-actions">' +
-              '<button class="btn-primary" type="submit">Войти</button>' +
-              '<button class="btn-ghost" type="button" id="backBtn">Назад</button>' +
-            '</div>' +
-          '</form>' +
-        '</div>';
-      var pi = document.getElementById("pinInput");
-      pi.focus();
-      document.getElementById("pinForm").onsubmit = function(e){
-        e.preventDefault();
-        if(pending.pin !== pinHash(pi.value)){ gateMsg("Неверный ПИН-код."); return; }
-        useProfile(pending);
-        gate.hidden = true;
-        render();
-      };
-      document.getElementById("backBtn").onclick = function(){ G.pending = null; G.msg = null; renderLogin(); };
-      return;
-    }
-
-    var list = DB.profiles.map(function(p){
-      return '<button class="profile-row" data-open="' + p.id + '">' +
-        '<span class="avatar">' + esc(initials(p.name)) + '</span>' +
-        '<span class="profile-meta"><b>' + esc(p.name) + '</b>' +
-        '<span>выучено ' + countKeys(p.known) + ' из ' + TOTAL + ' · ' + fmtDate(p.updated) + '</span></span>' +
-        (p.pin ? '<span class="lock" aria-label="Защищён ПИН-кодом">🔒</span>' : "") +
-      '</button>';
-    }).join("");
-
-    gate.innerHTML =
-      '<div class="gate-card">' +
-        '<div class="gate-eyebrow">BSUIR English Wordlists</div>' +
-        '<h2>' + (DB.profiles.length ? "С возвращением" : "Создайте профиль") + '</h2>' +
-        '<p class="gate-sub">Профиль хранит ваш прогресс по 13 урокам: выученные слова и отметки «трудное». ' +
-          'Профили живут в этом браузере, у каждого свой прогресс.</p>' +
-        (G.msg ? '<div class="msg ' + G.msgKind + '">' + esc(G.msg) + '</div>' : "") +
-        (list ? '<div class="profile-list">' + list + '</div><div class="divider">или создайте новый</div>' : "") +
-        '<form id="newForm" autocomplete="off">' +
-          '<div class="field">' +
-            '<label for="nameInput">Имя профиля</label>' +
-            '<input id="nameInput" placeholder="Например, Костя" maxlength="40">' +
-          '</div>' +
-          '<div class="field">' +
-            '<label for="newPin">ПИН-код (необязательно)</label>' +
-            '<input id="newPin" type="password" inputmode="numeric" placeholder="4 цифры" maxlength="12">' +
-          '</div>' +
-          '<button class="btn-primary test-start" type="submit">Создать профиль</button>' +
-        '</form>' +
-        (legacy ? '<p class="note" style="margin-top:14px">Найден прогресс из версии без профилей — он перенесётся в этот профиль.</p>' : "") +
-        '<div class="divider">уже есть файл прогресса</div>' +
-        importBlock("Загрузить файл прогресса") +
-        '<p class="note" style="margin-top:14px">ПИН-код защищает от случайного входа в чужой профиль на общем компьютере. ' +
-          'Это не шифрование: данные лежат в хранилище браузера, и тот, кто умеет открывать инструменты разработчика, их прочитает. ' +
-          'Не используйте здесь пароль от чего-то важного.</p>' +
-      '</div>';
-
-    Array.prototype.forEach.call(gate.querySelectorAll("[data-open]"), function(b){
-      b.onclick = function(){
-        var p = profileById(b.dataset.open);
-        if(!p) return;
-        if(p.pin){ G.pending = p.id; G.msg = null; renderLogin(); return; }
-        useProfile(p);
-        gate.hidden = true;
-        render();
-      };
-    });
-
-    var nameInput = document.getElementById("nameInput");
-    document.getElementById("newForm").onsubmit = function(e){
-      e.preventDefault();
-      var name = nameInput.value.trim();
-      if(!name){ gateMsg("Введите имя профиля."); return; }
-      if(profileByName(name)){ gateMsg("Профиль с таким именем уже есть."); return; }
-      var pin = document.getElementById("newPin").value.trim();
-      if(pin && !/^\d{4,12}$/.test(pin)){ gateMsg("ПИН-код — от 4 до 12 цифр."); return; }
-      var p = createProfile(name, pin, legacy);
-      if(legacy){ p.dir = legacy.dir || "en-ru"; if(byLesson(legacy.lesson)) p.lesson = legacy.lesson; legacy = null; }
-      useProfile(p);
-      gate.hidden = true;
-      render();
-    };
-
-    wireImport();
-  }
-
-  function renderAccount(){
-    var p = activeProfile();
-    if(!p){ renderLogin(); return; }
-
-    var learned = countKeys(p.known), hardN = countKeys(p.hard);
+  function renderProgress(){
+    var learned = countKeys(S.known), hardN = countKeys(S.hard);
     var started = 0;
     LESSONS.forEach(function(L){ if(knownIn(L.n) > 0) started++; });
 
     gate.innerHTML =
-      '<div class="gate-card">' +
-        '<div class="gate-eyebrow">Профиль</div>' +
-        '<h2>' + esc(p.name) + '</h2>' +
-        '<p class="gate-sub">Создан ' + fmtDate(p.created) + ' · последнее занятие ' + fmtDate(p.updated) + '</p>' +
+      '<div class="gate-card" role="dialog" aria-modal="true" aria-label="Прогресс">' +
+        '<div class="gate-eyebrow">BSUIR English Wordlists</div>' +
+        '<h2>Ваш прогресс</h2>' +
+        '<p class="gate-sub">Регистрации нет: прогресс хранится в этом браузере на этом устройстве. ' +
+          'Чтобы перенести его на другое устройство, сохраните файл и загрузите там.</p>' +
         (G.msg ? '<div class="msg ' + G.msgKind + '">' + esc(G.msg) + '</div>' : "") +
         '<div class="stat-grid">' +
           '<div class="stat"><b>' + learned + '</b><span>слов выучено из ' + TOTAL + '</span></div>' +
@@ -1276,36 +1106,34 @@
           '<div class="stat"><b>' + started + ' / ' + LESSONS.length + '</b><span>уроков начато</span></div>' +
         '</div>' +
         '<div class="divider">файл прогресса</div>' +
-        '<p class="note">Сохраните файл, чтобы перенести прогресс на другое устройство или в другой браузер — ' +
-          'а потом загрузите его там на экране входа.</p>' +
-        '<div class="row-actions" style="margin-top:12px">' +
+        '<div class="row-actions">' +
           '<button class="btn-primary" id="exportBtn" type="button">Сохранить файл</button>' +
         '</div>' +
         '<div style="margin-top:10px">' + importBlock("Загрузить файл") + '</div>' +
         (G.payload ?
           '<textarea class="code" id="payloadBox" readonly aria-label="Содержимое файла прогресса">' + esc(G.payload) + '</textarea>' +
           '<div class="row-actions"><button class="btn-ghost" id="copyBtn" type="button">Скопировать текст</button></div>' +
-          '<p class="note" style="margin-top:10px">Если скачивание заблокировано (так бывает при просмотре страницы внутри приложения), ' +
-          'скопируйте текст и сохраните его в файл <code>progress.json</code> вручную.</p>'
+          '<p class="note" style="margin-top:10px">Если скачивание заблокировано, скопируйте текст и сохраните его ' +
+          'в файл <code>progress.json</code> вручную.</p>'
           : "") +
-        '<div class="divider">профиль</div>' +
-        '<div class="row-actions">' +
-          '<button class="btn-ghost" id="switchBtn" type="button">Сменить профиль</button>' +
-          '<button class="btn-ghost" id="closeBtn" type="button">Вернуться к урокам</button>' +
+        '<p class="note" style="margin-top:16px">Очистка данных сайта в браузере сотрёт прогресс — ' +
+          'время от времени сохраняйте файл.</p>' +
+        '<div class="row-actions" style="margin-top:14px">' +
+          '<button class="btn-ghost" id="closeBtn" type="button">Закрыть</button>' +
         '</div>' +
-        '<p style="margin-top:16px"><button class="link-btn danger" id="delBtn" type="button">Удалить этот профиль</button></p>' +
+        '<p style="margin-top:16px"><button class="link-btn danger" id="wipeBtn" type="button">Сбросить весь прогресс</button></p>' +
       '</div>';
 
     document.getElementById("exportBtn").onclick = function(){
-      var text = exportText(p);
+      var text = exportText();
       G.payload = text;
       G.msg = "Готовим файл…"; G.msgKind = "ok";
-      renderAccount();
-      offerDownload(fileName(p), text, function(status){
+      renderProgress();
+      offerDownload(fileName(), text, function(status){
         if(status === "saved"){ G.msg = "Файл сохранён."; G.msgKind = "ok"; }
         else if(status === "declined"){ G.msg = "Сохранение отменено. Текст файла ниже — его можно скопировать."; G.msgKind = "err"; }
         else { G.msg = "Скачать файл здесь нельзя — скопируйте текст ниже."; G.msgKind = "err"; }
-        renderAccount();
+        renderProgress();
       });
     };
     wireImport();
@@ -1319,31 +1147,27 @@
         gateMsg(done ? "Скопировано." : "Не удалось скопировать — выделите текст вручную.", done ? "ok" : "err");
       };
     }
-    document.getElementById("switchBtn").onclick = function(){
-      DB.active = null; saveDB();
-      showGate("login");
-    };
-    document.getElementById("closeBtn").onclick = closeGate;
-    document.getElementById("delBtn").onclick = function(){
-      if(!confirm("Удалить профиль «" + p.name + "» вместе с его прогрессом? Отменить это нельзя.")) return;
-      DB.profiles = DB.profiles.filter(function(x){ return x.id !== p.id; });
-      DB.active = null; saveDB();
-      showGate("login");
+    document.getElementById("closeBtn").onclick = closeProgress;
+    document.getElementById("wipeBtn").onclick = function(){
+      if(!confirm("Сбросить прогресс по всем урокам? Отменить это нельзя.")) return;
+      S.known = {}; S.hard = {};
+      save();
+      startQuiz(); startMatch(); resetTest();
+      G.msg = "Прогресс сброшен."; G.msgKind = "ok";
+      renderProgress();
     };
   }
 
-  function exportText(p){
+  function exportText(){
     return JSON.stringify({
       app: FILE_TAG,
-      version: 1,
+      version: 2,
       exported: new Date().toISOString(),
-      profile: { name:p.name, created:p.created, updated:p.updated, known:p.known, hard:p.hard }
+      progress: { known:S.known, hard:S.hard }
     }, null, 1);
   }
-  function fileName(p){
-    var d = new Date().toISOString().slice(0, 10);
-    var n = p.name.replace(/[^\wА-Яа-яЁё-]+/g, "-").replace(/^-|-$/g, "") || "profile";
-    return "progress-" + n + "-" + d + ".json";
+  function fileName(){
+    return "progress-" + new Date().toISOString().slice(0, 10) + ".json";
   }
   // На GitHub Pages и при открытии файла с диска работает обычная ссылка-скачивание.
   // Внутри просмотрщика артефактов claude.ai ссылки не работают — там файл отдаёт
@@ -1390,48 +1214,35 @@
     r.readAsText(f);
   };
 
+  // загрузка объединяет файл с текущим прогрессом, ничего не затирая.
+  // Понимает и файлы прежней версии с профилями (поле profile).
   function applyImport(text){
     var d;
     try{ d = JSON.parse(text); }
     catch(e){ gateMsg("Это не файл прогресса: не читается как JSON."); return; }
-    if(!d || d.app !== FILE_TAG || !d.profile){ gateMsg("Это файл от другого приложения."); return; }
+    var src = d && d.app === FILE_TAG ? (d.progress || d.profile) : null;
+    if(!src){ gateMsg("Это файл от другого приложения."); return; }
 
-    var src = d.profile;
+    var before = countKeys(S.known);
     var known = src.known || {}, hard = src.hard || {};
-    var name = (src.name || "Импорт").trim();
-    var existing = profileByName(name);
-
-    if(existing){
-      for(var k in known) if(known.hasOwnProperty(k)) existing.known[k] = 1;
-      for(var h in hard) if(hard.hasOwnProperty(h)) if(!existing.known[h]) existing.hard[h] = 1;
-      existing.updated = Date.now();
-      saveDB();
-      useProfile(existing);
-      gate.hidden = true;
-      render();
-      return;
-    }
-
-    var p = createProfile(name, "", { known:known, hard:hard });
-    useProfile(p);
-    gate.hidden = true;
-    render();
+    for(var k in known) if(known.hasOwnProperty(k) && byId[k]){ S.known[k] = 1; delete S.hard[k]; }
+    for(var h in hard) if(hard.hasOwnProperty(h) && byId[h] && !S.known[h]) S.hard[h] = 1;
+    save();
+    startQuiz(); startMatch(); resetTest();
+    var added = countKeys(S.known) - before;
+    G.payload = null;
+    gateMsg("Прогресс загружен: выучено " + countKeys(S.known) + " слов" +
+      (added > 0 ? " (+" + added + " новых)." : "."), "ok");
   }
 
-  function renderProfileChip(){
-    var p = activeProfile();
-    var btn = document.getElementById("profileBtn");
-    if(!p){ btn.hidden = true; return; }
-    btn.hidden = false;
-    btn.innerHTML = '<span class="avatar">' + esc(initials(p.name)) + '</span>' + esc(p.name);
-  }
-
-  document.getElementById("profileBtn").onclick = function(){ showGate("account"); };
+  document.getElementById("profileBtn").onclick = openProgress;
+  document.addEventListener("keydown", function(e){
+    if(e.key === "Escape" && !gate.hidden) closeProgress();
+  });
 
   /* ---------------- маршрутизация ---------------- */
   function render(){
     renderHead();
-    renderProfileChip();
     // в режимах «Уроки» и «Тест» общие переключатели не нужны
     document.getElementById("dirBtn").hidden = (S.mode === "test" || S.mode === "index");
     document.getElementById("filterSel").hidden = (S.mode === "index");
@@ -1514,9 +1325,6 @@
   });
 
   fillLessonSelect();
-  var booted = activeProfile();
-  if(booted) useProfile(booted);
   render();
-  if(!booted) showGate("login");
 })();
 </script>
